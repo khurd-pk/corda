@@ -64,7 +64,7 @@ public class TradeClientRPC {
 
     // Log the trade state and also convert ito binary stream so to insert into Mongo db
     
-    private static void logState(StateAndRef<TradeState> state) {
+     private static void logState(StateAndRef<TradeState> state) {
         System.out.println("{Data: }"+ state.getState().getData());
         System.out.println("{Contract: }"+ state.getState().getContract());
         System.out.println("{Hash: }"+ state.getRef().getTxhash().toString());
@@ -73,14 +73,14 @@ public class TradeClientRPC {
             BsonDocument bsonDocument = fromInputStream(new ByteArrayInputStream(tradeStateAsBson));
             byte [] payload = ((BsonBinary)bsonDocument.get("payload")).getData();
             BsonDocument bsonDocumentReal = fromInputStream(new ByteArrayInputStream(payload));
-            System.out.println("{payload: }"+ bsonDocumentReal.toString());
-            BsonValue trader = bsonDocumentReal.get("trader");
-            System.out.println("{trader: }"+ trader.toString());
+            System.out.println("{Trade payload: }"+ bsonDocumentReal.toString());
             BsonValue payloadhash = bsonDocument.get("payloadhash");
-            System.out.println("{payloadhash: }"+ payloadhash.asString().getValue());
+            System.out.println("{Trade payloadhash: }"+ payloadhash.asString().getValue());
 
+            //Inserting into MongoDB
             BsonDocument mongoDbDoc = new BsonDocument();
-            mongoDbDoc.put("data", new BsonString(bsonDocumentReal.toString()));
+            mongoDbDoc.put("dataString", new BsonString(bsonDocumentReal.toString()));
+            mongoDbDoc.put("dataBinary", new BsonBinary(payload));
             mongoDbDoc.put("hash", new BsonString(payloadhash.asString().getValue()));
             mongoDbDoc.put("contractId", new BsonString(UUID.randomUUID().toString()));
 
@@ -89,6 +89,30 @@ public class TradeClientRPC {
             MongoCollection<BsonDocument> ledger = cordaDb.getCollection("ledger", BsonDocument.class);
             ledger.insertOne(mongoDbDoc);
             System.out.println("Bson Record Inserted in MongoDb");
+
+            //Fetching from MongoDB and comparing hash
+            FindIterable<BsonDocument> bsonFromDB = ledger.find();
+            MongoCursor<BsonDocument> bsonDocumentMongoCursor = bsonFromDB.iterator();
+            try {
+                while(bsonDocumentMongoCursor.hasNext()) {
+                    BsonDocument document = bsonDocumentMongoCursor.next();
+                    byte [] data = SHA256.Digest.getInstance("SHA256").digest(document.get("dataBinary").asBinary().getData());
+                    System.out.println("From DB - dataBinary : "+document.getBinary("dataBinary").getData().toString());
+                    System.out.println("From DB - hash: "+document.getString("hash"));
+                    System.out.println("Applied SHA2 on dataBinary : "+data.toString());
+                    StringBuffer stringBuffer = new StringBuffer();
+                    for (byte bytes : data) {
+                        stringBuffer.append(String.format("%02x", bytes & 0xff));
+                    }
+                    System.out.println("Converted SHA2 formatted data to Hex: "+stringBuffer.toString());
+
+                    if(payloadhash.asString().getValue().equals(stringBuffer.toString())){
+                        System.out.println("Hash stored in Corda Vault MATCHES WITH Hash of data stored in MongoDB");
+                    }
+                }
+            } finally {
+                bsonDocumentMongoCursor.close();
+            }
         }catch (Exception e){
             e.printStackTrace();
         }
